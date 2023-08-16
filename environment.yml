@@ -1,0 +1,27 @@
+name: flocs-scistack
+channels:
+  - defaults
+  - anaconda
+  - conda-forge
+dependencies:
+  - python=3.9
+  - pip
+  - numpy
+  - matplotlib
+  - scipy
+  - pandas
+  - openpyxl
+  - ipykernel
+  - pytest
+  - seaborn
+  - statsmodels
+  - graphviz
+  - pydot
+  - hydra-core
+  - plotly_express
+  - pyproj
+  - pip:
+    - pylint
+    - h5py
+    - dolfyn
+prefix: C:\tools\Anaconda3\envs\flocs-scistack
