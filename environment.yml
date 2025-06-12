@@ -1,4 +1,4 @@
-name: flocs-scistack
+name: prj-flocs
 channels:
   - defaults
   - anaconda
@@ -6,15 +6,17 @@ channels:
 dependencies:
   - python=3.9
   - pip
-  - numpy
+  - numpy=1.25.0
   - matplotlib
   - scipy
   - pandas
   - openpyxl
   - ipykernel
   - pytest
+  - scikit-learn
   - seaborn
   - statsmodels
+  - spyder
   - graphviz
   - pydot
   - hydra-core
