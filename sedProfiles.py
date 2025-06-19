@@ -7,6 +7,9 @@ import matplotlib.dates as dt
 import os
 import pandas as pd
 from sklearn import linear_model
+from datetime import datetime
+from collections import defaultdict
+
 
 def read_sed_samples(filename, sheet, parameters_to_include):
                      
@@ -221,3 +224,148 @@ def find_file(start_dir, filename):
     
     # If the file is not found in any subdirectory
     return None
+
+def rdi_readin_adcp_VariableBins(fn_adcp):
+      
+    xx = {}
+        
+    with open(fn_adcp,'r') as fid:
+        tt = rdi_topheader(fid)
+        for k,v in tt.items():
+            xx[k] = v
+
+        first_ensemble = True
+        
+        ctr = 0
+        while True:
+            ctr = ctr+1
+            tline = fid.readline()
+            if not tline: break
+        
+            aa = rdi_header(fid,tline)
+            bb = rdi_read_adcp_ens(fid, aa['bins'])
+
+
+
+            if first_ensemble:
+                for k,v in aa.items():
+                    xx[k] = [v]
+                for k,v in bb.items():
+                    xx[k] = v.T
+                first_ensemble = False
+            else:
+                for k,v in aa.items():
+                    xx[k].append(v)
+                for k,v in bb.items():
+                    xx[k] = np.column_stack([xx[k],v.T])
+       
+    return xx
+            
+def rdi_read_adcp_ens(fid, num_bins):
+    # Read all lines at once
+    lines = [fid.readline().strip().split() for _ in range(num_bins)]
+    
+    # Convert to float array
+    bin_array = np.array(lines, dtype=float)  # shape (num_bins, 13)
+
+    # Return sliced dictionary (no need for defaultdict or list append)
+    
+    out = {
+        'bin_dpt':  bin_array[:, 0],
+        'vel_mag':   bin_array[:, 1],
+        'dir':   bin_array[:, 2],
+        'evel':  bin_array[:, 3],
+        'nvel':  bin_array[:, 4],
+        'zvel':  bin_array[:, 5],
+        'ervel': bin_array[:, 6],
+        'b1':    bin_array[:, 7],
+        'b2':    bin_array[:, 8],
+        'b3':    bin_array[:, 9],
+        'b4':    bin_array[:, 10],
+        'dsc':   bin_array[:, 12]
+    }
+    
+    return out 
+    
+    
+    
+    
+
+def rdi_topheader(fid):
+    out = {}
+
+    # First two lines are notes
+    out['note1'] = fid.readline().strip()
+    out['note2'] = fid.readline().strip()
+
+    # Third line: read 7 float values
+    line = fid.readline()
+    parts = line.strip().split()
+
+    out['dcl'] = int(parts[0])  #depth cell length (cm)
+    out['bat'] = int(parts[1])  #blank after transmit (cm)
+    out['dcn'] = int(parts[2])  #adcp depth cfom config. node (cm)
+    out['ndc'] = int(parts[3])  #num depth cells
+    out['ppe'] = int(parts[4])  #pings per ensemble 
+    out['tpe'] = int(parts[5])  #time per ensemble (hundredths of seconds)
+    out['prm'] = int(parts[6])  #profiling mode
+
+    return out
+
+def rdi_header(fid,tline):
+    out = {}
+    
+    # Line 1: passed as tline (not read from file)
+    aa = [float(x) for x in tline.strip().split()]
+    year = aa[0] + 2000 if aa[0] < 100 else aa[0]  # Adjust 2-digit year
+    dt = datetime(int(year), int(aa[1]), int(aa[2]), int(aa[3]), int(aa[4]), int(aa[5]),int(aa[6]*10)) #year, month, day, hours, minutes, seconds, microseconds (convert from 1/100 seconds as given in ascii output)
+    
+    out['time'] = dt              # year, month, day, hour, minute, second, hundredths
+    out['pitrl'] = aa[9:11]            # pitch & roll (degrees)
+    out['corhead'] = aa[11]            # average adcp heading
+    out['temp'] = aa[12]               # instrument temperature (degrees C)
+
+    # Line 2
+    tline = fid.readline()
+    bb = [float(x) for x in tline.strip().split()]
+
+    out['bt'] = bb[0:4]                # bottom tracking: east, north, vertical, error
+    out['dpth'] = bb[8:12]             # depth beams 1–4
+
+    # Line 3
+    tline = fid.readline()
+    cc = [float(x) for x in tline.strip().split()]
+    out['totals'] = cc[0:5]            # total distance, time, north, east, distance made good
+
+    # Line 4
+    tline = fid.readline()
+    dd = [float(x) for x in tline.strip().split()]
+    out['lat'] = dd[0]            #Latitude
+    out['lon'] = dd[1]            #Longitude
+    out['Evel'] = dd[2]            #gga or vtg East velocity in m/s or ft/s
+    out['Nvel'] = dd[3]            #gga or vtg North velocity in m/s or ft/s
+
+    # Line 5
+    tline = fid.readline()
+    ee = [float(x) for x in tline.strip().split()]
+    out['Q_middle'] = ee[0]
+    out['Q_top'] = ee[1]
+    out['Q_bot'] = ee[2]
+    out['Q_start_shore']=ee[3]
+    out['Q_end_shore']=ee[5]
+    out['dist_start_shore']=ee[4]
+    out['dist_end_shore']=ee[6]
+    out['dpt_top_middle']=ee[7]
+    out['dpt_bot_middle']=ee[8]
+
+    # Line 6
+    tline = fid.readline()
+    ff = tline.strip().split()
+    out['bins'] = int(ff[0])                # Only the first value is used for number of bins
+    out['unit'] = ff[1]
+    out['vel_ref'] = ff[2]
+    out['intensity_unit'] = ff[3]
+    out['intensity_scale_factor'] = float(ff[4])
+    out['sound_absorption_factor'] = float(ff[5])
+
+    return out

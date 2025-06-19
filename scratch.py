@@ -59,9 +59,6 @@ profiles = sp.read_adcp_sections(profiles,adcp_folder)
 # make figures
 
 # %% 
-# add other parameters
-        
-        
-    
-
-
+fn_adcp = os.path.join(pth,'WBAY_001t.000')
+import sedProfiles as sp
+A = sp.rdi_readin_adcp_VariableBins(fn_adcp)
