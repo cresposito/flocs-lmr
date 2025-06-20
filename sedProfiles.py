@@ -228,11 +228,12 @@ def find_file(start_dir, filename):
 def rdi_readin_adcp_VariableBins(fn_adcp):
       
     xx = {}
+    xx['top'] = {}
         
     with open(fn_adcp,'r') as fid:
         tt = rdi_topheader(fid)
         for k,v in tt.items():
-            xx[k] = v
+            xx['top'][k] = v
 
         first_ensemble = True
         
@@ -243,23 +244,40 @@ def rdi_readin_adcp_VariableBins(fn_adcp):
             if not tline: break
         
             aa = rdi_header(fid,tline)
-            bb = rdi_read_adcp_ens(fid, aa['bins'])
-
-
-
+            bb = rdi_read_adcp_ens(fid, aa['num_bins'])
+                    
             if first_ensemble:
-                for k,v in aa.items():
-                    xx[k] = [v]
-                for k,v in bb.items():
-                    xx[k] = v.T
+                recursive_init(xx, aa)                 # for nested scalar/list data
+                recursive_init(xx, bb, stack_arrays=True)  # for nested arrays (e.g. bin data)
                 first_ensemble = False
             else:
-                for k,v in aa.items():
-                    xx[k].append(v)
-                for k,v in bb.items():
-                    xx[k] = np.column_stack([xx[k],v.T])
+                recursive_append(xx, aa)
+                recursive_append(xx, bb, stack_arrays=True)
        
     return xx
+
+def recursive_init(xx, data, stack_arrays=False):
+    for k, v in data.items():
+        if isinstance(v, dict):
+            xx[k] = {}
+            recursive_init(xx[k], v, stack_arrays)
+        elif isinstance(v, np.ndarray) and stack_arrays:
+            # Initialize with transposed array (assumes 2D)
+            xx[k] = v.T
+        else:
+            xx[k] = [v]  # Wrap scalar/list for append
+
+def recursive_append(xx, data, stack_arrays=False):
+    for k, v in data.items():
+        if isinstance(v, dict):
+            if k not in xx:
+                xx[k] = {}
+            recursive_append(xx[k], v, stack_arrays)
+        elif isinstance(v, np.ndarray) and stack_arrays:
+            # Stack arrays along the 2nd axis (columns = time/ensembles)
+            xx[k] = np.column_stack([xx[k], v.T])
+        else:
+            xx[k].append(v)
             
 def rdi_read_adcp_ens(fid, num_bins):
     # Read all lines at once
@@ -267,28 +285,31 @@ def rdi_read_adcp_ens(fid, num_bins):
     
     # Convert to float array
     bin_array = np.array(lines, dtype=float)  # shape (num_bins, 13)
+    
+    # clean for bad values here
+    #####################
+    #####################
+   
+    out = {}
+    out['vel'] = {}
+    out['bks'] = {}
+    
+    out['bin_dpt'] = bin_array[:, 0]
+    out['bin_dsc'] = bin_array[:, 12]
+    
+    out['vel']['vel_mag'] = bin_array[:, 1]
+    out['vel']['dir'] = bin_array[:, 2]
+    out['vel']['evel'] = bin_array[:, 3]
+    out['vel']['nvel'] = bin_array[:, 4]
+    out['vel']['zvel'] = bin_array[:, 5]
+    out['vel']['ervel'] = bin_array[:, 6]
+    
+    out['bks']['b1'] = bin_array[:, 7]
+    out['bks']['b2'] = bin_array[:, 8]
+    out['bks']['b3'] = bin_array[:, 9]
+    out['bks']['b4'] = bin_array[:, 10]
 
-    # Return sliced dictionary (no need for defaultdict or list append)
-    
-    out = {
-        'bin_dpt':  bin_array[:, 0],
-        'vel_mag':   bin_array[:, 1],
-        'dir':   bin_array[:, 2],
-        'evel':  bin_array[:, 3],
-        'nvel':  bin_array[:, 4],
-        'zvel':  bin_array[:, 5],
-        'ervel': bin_array[:, 6],
-        'b1':    bin_array[:, 7],
-        'b2':    bin_array[:, 8],
-        'b3':    bin_array[:, 9],
-        'b4':    bin_array[:, 10],
-        'dsc':   bin_array[:, 12]
-    }
-    
     return out 
-    
-    
-    
     
 
 def rdi_topheader(fid):
@@ -314,58 +335,88 @@ def rdi_topheader(fid):
 
 def rdi_header(fid,tline):
     out = {}
+    out['dpth']={}
+    out['pos']={}
+    out['disc']={}
+    out['misc']={}
+    out['bt_vel']={}
+    out['dist']={}
     
     # Line 1: passed as tline (not read from file)
     aa = [float(x) for x in tline.strip().split()]
     year = aa[0] + 2000 if aa[0] < 100 else aa[0]  # Adjust 2-digit year
     dt = datetime(int(year), int(aa[1]), int(aa[2]), int(aa[3]), int(aa[4]), int(aa[5]),int(aa[6]*10)) #year, month, day, hours, minutes, seconds, microseconds (convert from 1/100 seconds as given in ascii output)
     
+    
+    # clean for bad values here
+    #####################
+    #####################
+    
+    
+    
+    #cast into dictionary here
+    
     out['time'] = dt              # year, month, day, hour, minute, second, hundredths
     out['pitrl'] = aa[9:11]            # pitch & roll (degrees)
-    out['corhead'] = aa[11]            # average adcp heading
-    out['temp'] = aa[12]               # instrument temperature (degrees C)
+    
+    out['misc']['corhead'] = aa[11]            # average adcp heading
+    out['misc']['temp'] = aa[12]               # instrument temperature (degrees C)
 
     # Line 2
     tline = fid.readline()
     bb = [float(x) for x in tline.strip().split()]
 
-    out['bt'] = bb[0:4]                # bottom tracking: east, north, vertical, error
-    out['dpth'] = bb[8:12]             # depth beams 1–4
+    out['bt_vel']['bt_evel'] = bb[0]                # bottom tracking: east, north, vertical, error
+    out['bt_vel']['bt_nvel'] = bb[1]                # bottom tracking: east, north, vertical, error
+    out['bt_vel']['bt_zvel'] = bb[2]                # bottom tracking: east, north, vertical, error
+    out['bt_vel']['bt_etvel'] = bb[3]                # bottom tracking: east, north, vertical, error
+    
+    
+    out['dpth']['b1'] = bb[8]             # depth beams 1
+    out['dpth']['b2'] = bb[9]             # depth beams 2
+    out['dpth']['b3'] = bb[10]             # depth beams 3
+    out['dpth']['b4'] = bb[11]             # depth beams 4
+    out['dpth']['mean_depth'] = np.nanmean([bb[8], bb[9], bb[10], bb[11]])
 
     # Line 3
     tline = fid.readline()
     cc = [float(x) for x in tline.strip().split()]
-    out['totals'] = cc[0:5]            # total distance, time, north, east, distance made good
+    out['dist']['total'] = cc[0]            # total distance
+    out['dist']['time_s'] = cc[1]            # elapsed time
+    out['dist']['north'] = cc[2]            # distance north
+    out['dist']['east'] = cc[3]            # distance east
+    out['dist']['made_good'] = cc[4]            # distance made good
 
     # Line 4
     tline = fid.readline()
     dd = [float(x) for x in tline.strip().split()]
-    out['lat'] = dd[0]            #Latitude
-    out['lon'] = dd[1]            #Longitude
-    out['Evel'] = dd[2]            #gga or vtg East velocity in m/s or ft/s
-    out['Nvel'] = dd[3]            #gga or vtg North velocity in m/s or ft/s
+    out['pos']['lat'] = dd[0]            #Latitude
+    out['pos']['lon'] = dd[1]            #Longitude
+    out['pos']['Evel'] = dd[2]            #gga or vtg East velocity in m/s or ft/s
+    out['pos']['Nvel'] = dd[3]            #gga or vtg North velocity in m/s or ft/s
 
     # Line 5
     tline = fid.readline()
     ee = [float(x) for x in tline.strip().split()]
-    out['Q_middle'] = ee[0]
-    out['Q_top'] = ee[1]
-    out['Q_bot'] = ee[2]
-    out['Q_start_shore']=ee[3]
-    out['Q_end_shore']=ee[5]
-    out['dist_start_shore']=ee[4]
-    out['dist_end_shore']=ee[6]
-    out['dpt_top_middle']=ee[7]
-    out['dpt_bot_middle']=ee[8]
+    out['disc']['Q_middle'] = ee[0]
+    out['disc']['Q_top'] = ee[1]
+    out['disc']['Q_bot'] = ee[2]
+    out['disc']['Q_start_shore']=ee[3]
+    out['disc']['Q_end_shore']=ee[5]
+    out['disc']['dist_start_shore']=ee[4]
+    out['disc']['dist_end_shore']=ee[6]
+    out['disc']['dpt_top_middle']=ee[7]
+    out['disc']['dpt_bot_middle']=ee[8]
 
     # Line 6
     tline = fid.readline()
     ff = tline.strip().split()
-    out['bins'] = int(ff[0])                # Only the first value is used for number of bins
+    out['num_bins'] = int(ff[0])                # Only the first value is used for number of bins
     out['unit'] = ff[1]
-    out['vel_ref'] = ff[2]
-    out['intensity_unit'] = ff[3]
-    out['intensity_scale_factor'] = float(ff[4])
-    out['sound_absorption_factor'] = float(ff[5])
+    
+    out['misc']['vel_ref'] = ff[2]
+    out['misc']['intensity_unit'] = ff[3]
+    out['misc']['intensity_scale_factor'] = float(ff[4])
+    out['misc']['sound_absorption_factor'] = float(ff[5])
 
     return out
