@@ -58,7 +58,21 @@ profiles = sp.read_adcp_sections(profiles,adcp_folder)
 # %%
 # make figures
 
-# %% 
+# %% this will read west bay ADCP data
+pth = r'C:\Users\cesposito\THE WATER INSTITUTE OF THE GULF\P-00703_NSF_Caltech - General\Data\West Bay Report\ADCP Data\Trip 1a 10-11 Mar 2009\ASCII'
 fn_adcp = os.path.join(pth,'WBAY_001t.000')
 import sedProfiles as sp
 A = sp.rdi_readin_adcp_VariableBins(fn_adcp)
+
+
+
+#%% to read FSP adcp data
+pth = r'C:\Users\cesposito\THE WATER INSTITUTE OF THE GULF\P-00703_NSF_Caltech - General\Data\FSP_2016\ADCP\FSP_30_0'
+fn_adcp_pd0 = os.path.join(pth,'FSP_30_0_000_16-01-19_161056.PD0')
+fn_adcp_pd0_nc = os.path.join(pth,'FSP_30_0_000_16-01-19_161056.PD0.nc')
+
+# from netCDF4 import Dataset
+# nc_file = Dataset(fn_adcp_pd0_nc)
+
+import dolfyn
+ds=dolfyn.read(fn_adcp_pd0)

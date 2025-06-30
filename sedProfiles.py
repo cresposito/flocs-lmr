@@ -6,9 +6,14 @@ import matplotlib.gridspec as gridspec
 import matplotlib.dates as dt
 import os
 import pandas as pd
+import geopandas as gpd
+import contextily as cx
 from sklearn import linear_model
 from datetime import datetime
 from collections import defaultdict
+import pdb
+from shapely.geometry import Point
+
 
 
 def read_sed_samples(filename, sheet, parameters_to_include):
@@ -77,6 +82,7 @@ def profiles_from_sampling_info(smp,loc):
 
     #profiles will be defined by a unique combination of Station and Date
     unique_pairs = smp[['Station', 'Date']].drop_duplicates()
+    unique_pairs = unique_pairs.dropna()
     unique_list = list(unique_pairs.itertuples(index=False, name=None))
 
     profiles={}
@@ -88,7 +94,7 @@ def profiles_from_sampling_info(smp,loc):
         smp_prf = smp[(smp['Station'] == st_da[0]) & (smp['Date'] == st_da[1])].reset_index(drop=True)
 
         #pull data that applies to the entire profile from the first row
-        profiles[ctr]['Station'] = smp_prf.loc[0]['Station']
+        profiles[ctr]['Station'] = smp_prf.loc[0]['Station']           
         profiles[ctr]['Date'] = smp_prf.loc[0]['Date']
         profiles[ctr]['Total Depth (ft)'] = smp_prf.loc[0]['Total Depth (ft)']
         profiles[ctr]['Total Depth (m)'] = profiles[ctr]['Total Depth (ft)']*0.3048
@@ -112,7 +118,7 @@ def profiles_from_sampling_info(smp,loc):
 
     return profiles
 
-def profiles_add_gs(profiles,df_gs):
+def profiles_add_gs(profiles,df_gs,sample_id_style):
     # adds grain size data to the profiles
     
     #PROFILES: dictionary of profiles, as read in by profiles_from_sampling_info
@@ -120,19 +126,44 @@ def profiles_add_gs(profiles,df_gs):
     
     for key in profiles.keys():
         gs_rows = []    #this will store grain size data
-        for ii, di in enumerate(profiles[key]['gs']['Depth Increment']):
-            #create the sample name that will be used to identify this sample
-            ss = profiles[key]['Station'] + '_' + str(di)
-            if pd.notna(profiles[key]['gs']['Replicate Indicator'][ii]):
-                ss = ss + profiles[key]['gs']['Replicate Indicator'][ii]
-                
-            aa = df_gs[df_gs['Sample ID']==ss]
+        
+        #create the sample names that will be used to find the samples in this profile in the grain size data spreadsheet
+        if sample_id_style ==1:
+            #used for MR173
+            station = profiles[key]['Station']
+            dpth_inc = profiles[key]['gs']['Depth Increment']
+            sample_id = [station + '_' + str(di) for di in dpth_inc]
+            
+        elif sample_id_style ==2:
+            #used for West Bay
+            arr = profiles[key]['gs']['Isokinetic Sample Depth']
+            dpt = [f'{x:.1f}' if x % 1 else f'{int(x)}' for x in arr]
+
+            sample_id = []            
+            for dp in dpt:
+                sample_id.append(profiles[key]['Station'] + ' ' + str(dp) + 'ft')        
+        else:
+            raise ValueError('invalid sample_id_style')
+            
+        #replicate indicator style should be the same for all input data sets
+        for ii, ri in enumerate(profiles[key]['gs']['Replicate Indicator']):
+            #the replicate indicator will be a string if it is defined
+            if type(ri)==str:
+                sample_id[ii]=sample_id[ii]+ri
+
+        
+        for ii, sid in enumerate(sample_id):
+            # ss = profiles[key]['Station'] + '_' + str(sid)
+            # if pd.notna(profiles[key]['gs']['Replicate Indicator'][ii]):
+                # ss = ss + profiles[key]['gs']['Replicate Indicator'][ii]
+                           
+            aa = df_gs[df_gs['Sample ID']==sid]
             
             #ensure that aa has exactly one row
             #this means that the expected sample name is found exactly once in the 
             #detailed grain size data
             if len(aa)==1:
-                print(ss+ ' FOUND')
+                print(sid+ ' FOUND')
                 
                 #simply store the dataframe with grain size data
                 
@@ -144,8 +175,8 @@ def profiles_add_gs(profiles,df_gs):
                 gs_rows.append(aa.iloc[0]['gs'])           
                 
             else:
-                print(ss+ ' NOT FOUND')
-                
+                print(sid+ ' NOT FOUND')
+        
         profiles[key]['gs']['gs'] = np.vstack(gs_rows)
         
     return profiles
@@ -157,6 +188,8 @@ def read_adcp_sections(profiles,adcp_folder):
         print(profiles[key]['Station'])
         
         profiles[key]['adcp']['t']=[]
+        profiles[key]['adcp']['bin_dpth']=[]
+        profiles[key]['adcp']['bed_dpth']=[]
         profiles[key]['adcp']['z']=[]
         profiles[key]['adcp']['V_mag']=[]
         
@@ -166,9 +199,11 @@ def read_adcp_sections(profiles,adcp_folder):
             ens_end = profiles[key]['adcp']['ADCP Ensemble End'][i]
             
             try:
-                t,z,V_mag = read_adcp_section(adcp_path,ens_start,ens_end,profiles[key]['Total Depth (m)'])
+                t,bin_dpth, bed_dpth,z,V_mag = read_adcp_section(adcp_path,ens_start,ens_end)
                 
                 profiles[key]['adcp']['t'].append(t)
+                profiles[key]['adcp']['bin_dpth'].append(bin_dpth)
+                profiles[key]['adcp']['bed_dpth'].append(bed_dpth)
                 profiles[key]['adcp']['z'].append(z)
                 profiles[key]['adcp']['V_mag'].append(V_mag)
                 
@@ -183,7 +218,7 @@ def read_adcp_sections(profiles,adcp_folder):
 
 
             
-def read_adcp_section(adcp_path,ens_start,ens_end,station_depth):
+def read_adcp_section(adcp_path,ens_start,ens_end):
     
     ds=dolfyn.read(adcp_path)
     
@@ -204,14 +239,24 @@ def read_adcp_section(adcp_path,ens_start,ens_end,station_depth):
     V_masked=ds["vel"].where(mask, np.nan)
     V_mag=np.linalg.norm(V_masked,axis=0)
     
+    #bin depths
+    bin_dpth = ds['range']
+    
+    #bed depths
+    bed_dpth = ds['dist_bt'].mean(axis=0).values[i1:i2]
+    
     #height above bed
-    z=station_depth-ds['range']
+    dd=[]
+    for d in bed_dpth:
+        dd.append(d-bin_dpth)
+    
+    z=np.stack(dd,axis=1)
     
     # clip for ensembles
     V_mag = V_mag[:, i1:i2]
     t = t[i1:i2]
     
-    return t,z,V_mag
+    return t,bin_dpth, bed_dpth,z,V_mag
     
 def find_file(start_dir, filename):
     #find a file named filename. Assumes that there is only one file within start_dir with this name.
@@ -225,7 +270,9 @@ def find_file(start_dir, filename):
     # If the file is not found in any subdirectory
     return None
 
-def rdi_readin_adcp_VariableBins(fn_adcp):
+def rdi_readin_adcp_VariableBins(fn_adcp,points_gdf = True):
+    #fn_adcp:       filename with WinRiver classic ASCII output
+    #points_gdf:    if true, include a geodataframe in the position field
       
     xx = {}
     xx['top'] = {}
@@ -245,6 +292,9 @@ def rdi_readin_adcp_VariableBins(fn_adcp):
         
             aa = rdi_header(fid,tline)
             bb = rdi_read_adcp_ens(fid, aa['num_bins'])
+            
+            ###make a z field
+            bb['z'] = aa['dpth']['mean_depth']-bb['bin_dpth']  #height above the bed added to header
                     
             if first_ensemble:
                 recursive_init(xx, aa)                 # for nested scalar/list data
@@ -253,7 +303,17 @@ def rdi_readin_adcp_VariableBins(fn_adcp):
             else:
                 recursive_append(xx, aa)
                 recursive_append(xx, bb, stack_arrays=True)
-       
+    
+    if points_gdf:
+        points = [Point(xy) for xy in zip(xx['pos']['lon'], xx['pos']['lat'])]  # x=lon, y=lat
+        
+        # Create GeoDataFrame and set WGS84 CRS
+        points_gdf = gpd.GeoDataFrame(index=range(len(points)), geometry=points, crs='EPSG:4326')
+
+        #points stored in both wgs84(lat/lon) and in web mercator
+        xx['pos']['points_wgs84']=points_gdf
+        xx['pos']['points_web']=points_gdf.to_crs(epsg=3857)        
+        
     return xx
 
 def recursive_init(xx, data, stack_arrays=False):
@@ -278,60 +338,6 @@ def recursive_append(xx, data, stack_arrays=False):
             xx[k] = np.column_stack([xx[k], v.T])
         else:
             xx[k].append(v)
-            
-def rdi_read_adcp_ens(fid, num_bins):
-    # Read all lines at once
-    lines = [fid.readline().strip().split() for _ in range(num_bins)]
-    
-    # Convert to float array
-    bin_array = np.array(lines, dtype=float)  # shape (num_bins, 13)
-    
-    # clean for bad values here
-    #####################
-    #####################
-   
-    out = {}
-    out['vel'] = {}
-    out['bks'] = {}
-    
-    out['bin_dpt'] = bin_array[:, 0]
-    out['bin_dsc'] = bin_array[:, 12]
-    
-    out['vel']['vel_mag'] = bin_array[:, 1]
-    out['vel']['dir'] = bin_array[:, 2]
-    out['vel']['evel'] = bin_array[:, 3]
-    out['vel']['nvel'] = bin_array[:, 4]
-    out['vel']['zvel'] = bin_array[:, 5]
-    out['vel']['ervel'] = bin_array[:, 6]
-    
-    out['bks']['b1'] = bin_array[:, 7]
-    out['bks']['b2'] = bin_array[:, 8]
-    out['bks']['b3'] = bin_array[:, 9]
-    out['bks']['b4'] = bin_array[:, 10]
-
-    return out 
-    
-
-def rdi_topheader(fid):
-    out = {}
-
-    # First two lines are notes
-    out['note1'] = fid.readline().strip()
-    out['note2'] = fid.readline().strip()
-
-    # Third line: read 7 float values
-    line = fid.readline()
-    parts = line.strip().split()
-
-    out['dcl'] = int(parts[0])  #depth cell length (cm)
-    out['bat'] = int(parts[1])  #blank after transmit (cm)
-    out['dcn'] = int(parts[2])  #adcp depth cfom config. node (cm)
-    out['ndc'] = int(parts[3])  #num depth cells
-    out['ppe'] = int(parts[4])  #pings per ensemble 
-    out['tpe'] = int(parts[5])  #time per ensemble (hundredths of seconds)
-    out['prm'] = int(parts[6])  #profiling mode
-
-    return out
 
 def rdi_header(fid,tline):
     out = {}
@@ -346,12 +352,6 @@ def rdi_header(fid,tline):
     aa = [float(x) for x in tline.strip().split()]
     year = aa[0] + 2000 if aa[0] < 100 else aa[0]  # Adjust 2-digit year
     dt = datetime(int(year), int(aa[1]), int(aa[2]), int(aa[3]), int(aa[4]), int(aa[5]),int(aa[6]*10)) #year, month, day, hours, minutes, seconds, microseconds (convert from 1/100 seconds as given in ascii output)
-    
-    
-    # clean for bad values here
-    #####################
-    #####################
-    
     
     
     #cast into dictionary here
@@ -418,5 +418,271 @@ def rdi_header(fid,tline):
     out['misc']['intensity_unit'] = ff[3]
     out['misc']['intensity_scale_factor'] = float(ff[4])
     out['misc']['sound_absorption_factor'] = float(ff[5])
+    
+    # clean for bad values here
+    #####################
+    #####################
 
     return out
+
+            
+def rdi_read_adcp_ens(fid, num_bins):
+    # Read all lines at once
+    lines = [fid.readline().strip().split() for _ in range(num_bins)]
+    
+    # Convert to float array
+    bin_array = np.array(lines, dtype=float)  # shape (num_bins, 13)
+      
+    out = {}
+    out['vel'] = {}
+    out['bks'] = {}
+    
+    out['bin_dpth'] = bin_array[:, 0]
+    out['bin_disc'] = bin_array[:, 12]
+    
+    out['vel']['vel_mag'] = bin_array[:, 1]
+    out['vel']['dir'] = bin_array[:, 2]
+    out['vel']['evel'] = bin_array[:, 3]
+    out['vel']['nvel'] = bin_array[:, 4]
+    out['vel']['zvel'] = bin_array[:, 5]
+    out['vel']['ervel'] = bin_array[:, 6]
+    
+    out['bks']['b1'] = bin_array[:, 7]
+    out['bks']['b2'] = bin_array[:, 8]
+    out['bks']['b3'] = bin_array[:, 9]
+    out['bks']['b4'] = bin_array[:, 10]
+
+    ####
+    # clean for bad values here
+    out['bin_disc'][out['bin_disc']==2147483647]=np.nan
+    
+    ii_bad_vel = out['vel']['vel_mag']==-32768
+
+    for key in out['vel']:
+        out['vel'][key][ii_bad_vel] = np.nan
+
+    for key in out['bks']:
+        out['bks'][key][ii_bad_vel] = np.nan
+        
+
+    return out 
+
+def attach_adcp_to_profiles(profiles,A,buffer):
+    #profiles:      grain size profiles
+    #A              dictionary of ADCP profiles as read in by rdi_readin_adcp_VariableBins
+    #buffer         buffer to associate ADCP transect data with profile station points
+    
+    for key in profiles.keys():
+        print(key)
+        prf = profiles[key]
+        
+        #compute clipping polygon
+        pt=Point(prf['Lon'],prf['Lat'])
+        gdf = gpd.GeoDataFrame(geometry=[pt],crs='EPSG:4326')
+        gdf = gdf.to_crs(epsg=3857)
+        gdf_buff = gpd.GeoDataFrame(geometry=gdf.buffer(buffer),crs = gdf.crs)
+        
+        #get list of all adcp transects associated with this profile
+        adcp_fns = []
+        for lne in prf['adcp']['Stationary ADCP File Name']:
+            #list of adcp file names. if there is a file with an r suffix, change it to t
+            adcp_fns = adcp_fns + lne.replace(' ','').replace('r.','t.').split(';')  
+            
+        adcp_fns = list(set(adcp_fns))    
+
+        #for each adcp transect in the adcp key
+        prf['adcp']['V_mag']=[]
+        prf['adcp']['Stationary ADCP File Name']=[]
+        prf['adcp']['t']=[]
+        prf['adcp']['z']=[]
+        prf['adcp']['bed_dpth']=[]
+        prf['adcp']['bin_dpth']=[]
+        prf['adcp']['pos']=[]
+        prf['station_pt']=gdf
+        prf['buffer_poly']=gdf_buff
+        
+        for fn in adcp_fns:
+            # print(fn)
+            inside_mask = A[fn]['pos']['points_web'].geometry.within(gdf_buff.geometry.iloc[0])
+            inside_indices = A[fn]['pos']['points_web'][inside_mask].index.to_list()
+            # print(inside_indices)
+            
+            prf['adcp']['V_mag'].append(A[fn]['vel']['vel_mag'][:,inside_indices])
+            prf['adcp']['z'].append(A[fn]['z'][:,inside_indices])
+            prf['adcp']['Stationary ADCP File Name'].append(fn)
+            prf['adcp']['t'].append(np.array(A[fn]['time'])[inside_indices])
+            prf['adcp']['pos'].append(A[fn]['pos']['points_web'].iloc[inside_indices])
+            prf['adcp']['bed_dpth'].append(np.array(A[fn]['dpth']['mean_depth'])[inside_indices])
+
+                        
+            #check that all columns are the same. if they are, set the bin depth column and the z column. if not, throw an error
+            aa = A[fn]['bin_dpth']
+            if np.all(aa == aa[:,0][:,None]):
+                prf['adcp']['bin_dpth'].append(aa[:,0])
+            else:
+                raise ValueError('code does not handle variable bins')
+                
+        profiles[key]=prf
+        
+    return profiles
+
+def profile_map_figure(profiles,A):
+    #profiles:      grain size profiles
+    #A              dictionary of ADCP profiles as read in by rdi_readin_adcp_VariableBins
+
+    fig, ax = plt.subplots()
+
+    for key in profiles.keys():
+        profiles[key]['buffer_poly'].plot(ax=ax,facecolor='none',edgecolor='purple')
+        profiles[key]['station_pt'].plot(ax=ax, markersize=10, color='red')
+        
+        for ii in range(len(profiles[key]['adcp']['pos'])):
+            profiles[key]['adcp']['pos'][ii].plot(ax=ax,color='black')
+        
+    cx.add_basemap(ax, source=cx.providers.CartoDB.Positron, zoom=12)
+
+
+def rdi_topheader(fid):
+    out = {}
+
+    # First two lines are notes
+    out['note1'] = fid.readline().strip()
+    out['note2'] = fid.readline().strip()
+
+    # Third line: read 7 float values
+    line = fid.readline()
+    parts = line.strip().split()
+
+    out['dcl'] = int(parts[0])  #depth cell length (cm)
+    out['bat'] = int(parts[1])  #blank after transmit (cm)
+    out['dcn'] = int(parts[2])  #adcp depth cfom config. node (cm)
+    out['ndc'] = int(parts[3])  #num depth cells
+    out['ppe'] = int(parts[4])  #pings per ensemble 
+    out['tpe'] = int(parts[5])  #time per ensemble (hundredths of seconds)
+    out['prm'] = int(parts[6])  #profiling mode
+
+    return out
+
+
+
+
+def vel_profiles(profiles):
+    
+    #PROFILES:  dict of sediment grain size profiles data
+
+    for k1 in profiles.keys():
+        ustar_list =[]
+        z0_list = []
+        ufit_list = []
+        zfit_list =[]
+        UU = []
+        ZZ = []
+        
+        for i in range(len(profiles[k1]['adcp']['V_mag'])):
+            ustar, z0, UU, ZZ = vel_profile(
+                V_mag = profiles[k1]['adcp']['V_mag'][i],
+                z = profiles[k1]['adcp']['z'][i]
+                )
+
+            k=0.41            
+            zfit = np.arange(0.1,profiles[k1]['adcp']['z'][i].max(),0.1)
+            ufit = (ustar/k)*np.log(zfit/z0)            
+            
+            ustar_list.append(ustar)
+            z0_list.append(z0)
+            ufit_list.append(ufit)
+            zfit_list.append(zfit)
+
+        profiles[k1]['adcp']['fit']={}
+        profiles[k1]['adcp']['fit']['ustar'] = ustar_list
+        profiles[k1]['adcp']['fit']['z0'] = z0_list
+        profiles[k1]['adcp']['fit']['ufit'] = ufit_list
+        profiles[k1]['adcp']['fit']['zfit'] = zfit_list
+        profiles[k1]['adcp']['fit']['UU'] = UU
+        profiles[k1]['adcp']['fit']['ZZ'] = ZZ
+        
+    return profiles
+
+        
+def vel_profile(V_mag,z):
+    # computes the u* and z0 for a section of adcp data
+    # V_MAG     mxn numpy array of velocity data. 
+    # Z         (m,) data array of z levels (height above bed) where the velocity data were collected
+    
+    ii = ~np.isnan(V_mag)
+        
+    UU = V_mag[ii]
+    ZZ = z[ii]
+    
+    lnZ=np.log(ZZ)
+       
+    lnZ=lnZ.reshape(-1,1)
+    regr=linear_model.LinearRegression()
+    
+    try:
+        regr.fit(lnZ,UU)
+    except ValueError as e:
+        # Handle the ValueError (or any exception) here
+        print(f"An error occurred: {e}")
+        pass  # Optionally, handle the error gracefully or do nothing
+    
+    k=0.41
+    ustar=regr.coef_*k
+    z0=np.exp(-1*k*regr.intercept_/ustar)
+    
+    return ustar, z0, UU, ZZ
+
+def velocity_profile_figure(profile,fn_save = None):
+
+    station = profile['Station']
+    date =  str(profile['Date'])
+    dpth = profile['Total Depth (m)']
+    adcp = profile['adcp']
+    adcp_fit = profile['adcp']['fit']
+    
+    num_samples = len(adcp['t'])
+    
+    fig, axs = plt.subplots(num_samples,2,width_ratios=[3,1],figsize=(10,2+2*num_samples))
+    fig.suptitle(f'{station} \n {date} \n Total Depth (m): {dpth:.2f}')
+    
+    for i in range(num_samples):
+    
+        t = adcp['t'][i]
+        bin_dpth = adcp['bin_dpth'][i]
+        bed_dpth = adcp['bed_dpth'][i]
+        V_mag = adcp['V_mag'][i]
+
+        ufit_list = adcp_fit['ufit'][i]
+        zfit_list = adcp_fit['zfit'][i]
+        ustar = adcp_fit['ustar'][i]
+        z0 = adcp_fit['z0'][i]
+        
+        axs[i,0].pcolormesh(
+            t,
+            bin_dpth,
+            V_mag,
+            cmap='Blues',
+            shading='nearest'
+            )
+        
+        axs[i,0].plot(t, bed_dpth, linestyle=':', linewidth=2, color='black')
+        axs[i,0].yaxis.set_inverted(True)
+        axs[i,0].set_ylim(bottom=bed_dpth.max()*1.15)
+        axs[i,0].xaxis.set_major_formatter(dt.DateFormatter('%H:%M:%S'))
+        axs[i,0].xaxis.set_major_locator(dt.SecondLocator(bysecond=range(0, 60, 15)))  # Tick every 15 seconds starting on the minute
+        
+        axs[i,0].set_ylabel('depth (m)')
+
+        axs[i,1].plot(adcp_fit['UU'],adcp_fit['ZZ'],'.',color='lightgrey',zorder=0)
+        axs[i,1].plot(ufit_list,zfit_list,label = f'u* = {ustar[0]:.2f} \nz0 = {z0[0]:.2f}')
+        axs[i,1].plot([0,2], [0, 0], linestyle=':', linewidth=2, color='black')
+        axs[i,1].set_ylim(bottom=-1)
+        axs[i,1].set_xlim([0,2])
+        axs[i,1].legend()
+        axs[i,1].set_ylabel('height above \nbed (m)',labelpad=0)
+        
+        
+    if fn_save != None:
+        fig.savefig(fn_save)
+        
+    return fig, axs
