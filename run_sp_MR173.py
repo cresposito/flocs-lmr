@@ -31,6 +31,7 @@ sh_loc = 'IsoSamplingLocs'
 fn_smp = os.path.join(baseDataSetFolder,r'StationaryADCP\MR173_StationaryADCP&Isokinetic.xlsx')
 sh_smp = 'ADCP Vertical '
 
+data_set = 'MR_173'
 
 # %%
 # read the detailed grain size data
@@ -47,6 +48,10 @@ smp = pd.read_excel(fn_smp,sheet_name = sh_smp)
 # %%
 # organize data into profiles
 profiles_MR173 = sp.profiles_from_sampling_info(smp,loc)
+
+# add location
+for key in profiles_MR173.keys():
+    profiles_MR173[key]['data_set'] = data_set
 
 # add grain size data
 profiles_MR173 = sp.profiles_add_gs(profiles_MR173,df_gs,sample_id_style=1)
@@ -90,21 +95,22 @@ for x, y, label in zip(profile_gdf.geometry.x, profile_gdf.geometry.y, profile_g
 # Add basemap
 cx.add_basemap(ax, source=cx.providers.CartoDB.Positron, zoom=12)
 
-# plt.show()
-
+pth = r'C:\Users\cesposito\THE WATER INSTITUTE OF THE GULF\P-00703_NSF_Caltech - General\Data\_ProcessedData'
+fn_save = 'MR173_Map.png'
+fig.savefig(os.path.join(pth,fn_save))
 #%% velocity profiles for all profiles
 import sedProfiles as sp
 
 for key in profiles_MR173.keys():
     
-    fn_save = profiles_MR173[key]['Station']+'_'+str(profiles_MR173[key]['Date'])+'.png'
+    fn_save = 'MR_173_' + profiles_MR173[key]['Station']+'_'+str(profiles_MR173[key]['Date'])+'.png'
     illegal_chars = {'<', '>', ':', '"', '/', '\\', '|', '?', '*'}
     fn_save = ''.join(c if c not in illegal_chars else '_' for c in fn_save)
     fn_save = fn_save+'.png'
     
     pth = r'C:\Users\cesposito\THE WATER INSTITUTE OF THE GULF\P-00703_NSF_Caltech - General\Data\_ProcessedData'
     
-    fig, ax = sp.velocity_profile_figure(profiles_MR173[key],fn_save=os.path.join(pth,fn_save))
+    fig, ax = sp.profile_figure(profiles_MR173[key],fn_save=os.path.join(pth,fn_save))
     plt.close(fig)
 
 #%%

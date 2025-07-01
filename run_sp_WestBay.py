@@ -35,6 +35,10 @@ sh_smp = 'WestBay'
 # buffer for selecting relevant ADCP points, in meters
 buffer = 100
 
+# data set
+data_set = 'WB'
+
+
 # %%
 # read the detailed grain size data
 df_gs = sp.read_sed_samples(fn_gs,sh_gs,params_fn_gs)
@@ -56,6 +60,10 @@ smp = pd.read_excel(fn_smp,sheet_name = sh_smp)
 # %%
 # organize data into profiles
 profiles_WB = sp.profiles_from_sampling_info(smp,loc)
+
+# add location
+for key in profiles_WB.keys():
+    profiles_WB[key]['data_set'] = data_set
 
 # add grain size data
 profiles_WB = sp.profiles_add_gs(profiles_WB,df_gs,sample_id_style=2)
@@ -88,66 +96,43 @@ for fn in adcp_fns:
 importlib.reload(sp)
 
 profiles_WB = sp.attach_adcp_to_profiles(profiles_WB,A,buffer)
-
-sp.profile_map_figure(profiles_WB, A)
-
-       
+      
 
 # %% 
 # calculate u*
 
 profiles_WB = sp.vel_profiles(profiles_WB)
 
-# %%
-# make figures
+# %% map figure
 
-# %% this will read west bay ADCP data
-pth = r'C:\Users\cesposito\THE WATER INSTITUTE OF THE GULF\P-00703_NSF_Caltech - General\Data\West Bay Report\ADCP Data\Trip 1c 5-6 May 2009\ASCII'
-fn_adcp = os.path.join(pth,'WBAY_166t.000')
-import sedProfiles as sp
-B = sp.rdi_readin_adcp_VariableBins(fn_adcp)
-
-station='R-4.5-A'
+pth = r'C:\Users\cesposito\THE WATER INSTITUTE OF THE GULF\P-00703_NSF_Caltech - General\Data\_ProcessedData'
+fn_save = 'WB_Map.png'
+sp.profile_map_figure(profiles_WB, A,fn_save = os.path.join(pth,fn_save))
 
 
-#%%
+#%% velocity profiles for all profiles
 
-# Reproject to Web Mercator (required for contextily basemaps)
-loc_web = loc.to_crs(epsg=3857)
-lw = loc_web[loc_web['station']==station]
-lw = lw.drop_duplicates()
+for key in profiles_WB.keys():
+    
+    fn_save = (
+        'VEL_'
+        +profiles_WB[key]['data_set']
+        +'_'
+        +profiles_WB[key]['Station']
+        +'_'
+        +str(profiles_WB[key]['Date'])
+        +'.png'
+        )
+        
+    illegal_chars = {'<', '>', ':', '"', '/', '\\', '|', '?', '*'}
+    fn_save = ''.join(c if c not in illegal_chars else '_' for c in fn_save)
+    
+    pth = r'C:\Users\cesposito\THE WATER INSTITUTE OF THE GULF\P-00703_NSF_Caltech - General\Data\_ProcessedData'
+    
+    profile_fig_out = sp.profile_figure(profiles_WB[key],fn_save=os.path.join(pth,fn_save))
+    if profile_fig_out == None:
+        pass
+    else:
+        fig, ax = profile_fig_out   
+        plt.close(fig)
 
-buffer = 100    #meters
-lwb = lw.buffer(buffer)
-lwb_gdf = gpd.GeoDataFrame(geometry=lwb,crs = lw.crs)
-clip_polygon = lwb_gdf.geometry.iloc[0]
-
-
-points = [Point(xy) for xy in zip(B['pos']['lon'], B['pos']['lat'])]  # x=lon, y=lat
-
-# Create GeoDataFrame and set WGS84 CRS
-points_gdf = gpd.GeoDataFrame(index=range(len(points)), geometry=points, crs='EPSG:4326')
-
-
-# Reproject to match loc_web (EPSG:3857)
-points_web = points_gdf.to_crs(epsg=3857)
-
-
-# Boolean mask: which points are inside the polygon
-inside_mask = points_web.geometry.within(clip_polygon)
-
-# Get indices or values
-inside_indices = points_web[inside_mask].index.to_list()
-
-
-# Plot
-fig, ax = plt.subplots()
-lwb_gdf.plot(ax=ax,facecolor='none',edgecolor='purple')
-loc_web.plot(ax=ax, markersize=10, color='red')
-points_web.iloc[inside_indices].plot(ax=ax,color='blue',linewidth=2)
-lw.plot(ax=ax,color='purple')
-
-# Add basemap
-cx.add_basemap(ax, source=cx.providers.CartoDB.Positron, zoom=12)
-
-plt.show()

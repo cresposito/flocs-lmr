@@ -13,6 +13,7 @@ from datetime import datetime
 from collections import defaultdict
 import pdb
 from shapely.geometry import Point
+from matplotlib.gridspec import GridSpec
 
 
 
@@ -467,6 +468,14 @@ def rdi_read_adcp_ens(fid, num_bins):
 
     return out 
 
+def ft_to_SI(xx):
+    
+    if not all(u == 'ft' for u in xx['unit']):
+        raise ValueError('all these should be ft...add other functionality as needed')
+        
+    
+        
+
 def attach_adcp_to_profiles(profiles,A,buffer):
     #profiles:      grain size profiles
     #A              dictionary of ADCP profiles as read in by rdi_readin_adcp_VariableBins
@@ -526,21 +535,6 @@ def attach_adcp_to_profiles(profiles,A,buffer):
         
     return profiles
 
-def profile_map_figure(profiles,A):
-    #profiles:      grain size profiles
-    #A              dictionary of ADCP profiles as read in by rdi_readin_adcp_VariableBins
-
-    fig, ax = plt.subplots()
-
-    for key in profiles.keys():
-        profiles[key]['buffer_poly'].plot(ax=ax,facecolor='none',edgecolor='purple')
-        profiles[key]['station_pt'].plot(ax=ax, markersize=10, color='red')
-        
-        for ii in range(len(profiles[key]['adcp']['pos'])):
-            profiles[key]['adcp']['pos'][ii].plot(ax=ax,color='black')
-        
-    cx.add_basemap(ax, source=cx.providers.CartoDB.Positron, zoom=12)
-
 
 def rdi_topheader(fid):
     out = {}
@@ -579,27 +573,29 @@ def vel_profiles(profiles):
         ZZ = []
         
         for i in range(len(profiles[k1]['adcp']['V_mag'])):
-            ustar, z0, UU, ZZ = vel_profile(
-                V_mag = profiles[k1]['adcp']['V_mag'][i],
-                z = profiles[k1]['adcp']['z'][i]
-                )
+            if profiles[k1]['adcp']['V_mag'][i].shape[1]>0:
+                ustar, z0, UU, ZZ = vel_profile(
+                    V_mag = profiles[k1]['adcp']['V_mag'][i],
+                    z = profiles[k1]['adcp']['z'][i]
+                    )
+    
+                k=0.41            
+                zfit = np.arange(0.1,profiles[k1]['adcp']['z'][i].max(),0.1)
+                ufit = (ustar/k)*np.log(zfit/z0)            
+                
+                ustar_list.append(ustar)
+                z0_list.append(z0)
+                ufit_list.append(ufit)
+                zfit_list.append(zfit)
 
-            k=0.41            
-            zfit = np.arange(0.1,profiles[k1]['adcp']['z'][i].max(),0.1)
-            ufit = (ustar/k)*np.log(zfit/z0)            
-            
-            ustar_list.append(ustar)
-            z0_list.append(z0)
-            ufit_list.append(ufit)
-            zfit_list.append(zfit)
-
-        profiles[k1]['adcp']['fit']={}
-        profiles[k1]['adcp']['fit']['ustar'] = ustar_list
-        profiles[k1]['adcp']['fit']['z0'] = z0_list
-        profiles[k1]['adcp']['fit']['ufit'] = ufit_list
-        profiles[k1]['adcp']['fit']['zfit'] = zfit_list
-        profiles[k1]['adcp']['fit']['UU'] = UU
-        profiles[k1]['adcp']['fit']['ZZ'] = ZZ
+        if len(ufit_list)>0:        #profiles with not valid fits will not get the ['fit'] field
+            profiles[k1]['adcp']['fit']={}
+            profiles[k1]['adcp']['fit']['ustar'] = ustar_list
+            profiles[k1]['adcp']['fit']['z0'] = z0_list
+            profiles[k1]['adcp']['fit']['ufit'] = ufit_list
+            profiles[k1]['adcp']['fit']['zfit'] = zfit_list
+            profiles[k1]['adcp']['fit']['UU'] = UU
+            profiles[k1]['adcp']['fit']['ZZ'] = ZZ
         
     return profiles
 
@@ -614,6 +610,13 @@ def vel_profile(V_mag,z):
     UU = V_mag[ii]
     ZZ = z[ii]
     
+    #keep only elements where both UU and ZZ are positive
+    jj = (UU >= 0) & (ZZ >= 0)
+    
+    UU=UU[jj]
+    ZZ=ZZ[jj]
+    
+    
     lnZ=np.log(ZZ)
        
     lnZ=lnZ.reshape(-1,1)
@@ -621,31 +624,42 @@ def vel_profile(V_mag,z):
     
     try:
         regr.fit(lnZ,UU)
+        k=0.41
+        ustar=regr.coef_*k
+        z0=np.exp(-1*k*regr.intercept_/ustar)
+
     except ValueError as e:
         # Handle the ValueError (or any exception) here
         print(f"An error occurred: {e}")
-        pass  # Optionally, handle the error gracefully or do nothing
-    
-    k=0.41
-    ustar=regr.coef_*k
-    z0=np.exp(-1*k*regr.intercept_/ustar)
+        pdb.set_trace()    
     
     return ustar, z0, UU, ZZ
 
-def velocity_profile_figure(profile,fn_save = None):
+def profile_figure(profile,fn_save = None):
 
     station = profile['Station']
     date =  str(profile['Date'])
     dpth = profile['Total Depth (m)']
     adcp = profile['adcp']
-    adcp_fit = profile['adcp']['fit']
     
-    num_samples = len(adcp['t'])
+    if 'fit' in profile['adcp']:
+        adcp_fit = profile['adcp']['fit']
+    else:
+        print(f'no adcp fits in profile {station}')
+        return
     
-    fig, axs = plt.subplots(num_samples,2,width_ratios=[3,1],figsize=(10,2+2*num_samples))
+    num_fits = len(adcp['fit']['ufit'])
+    num_rows = num_fits+1   #the last row is for the grain size profile
+    
+    # fig, axs = plt.subplots(num_rows,2,width_ratios=[3,1],figsize=(10,2+2*num_rows))
+    
+    fig = plt.figure(layout = 'constrained',figsize=(10,2+2*num_rows))
     fig.suptitle(f'{station} \n {date} \n Total Depth (m): {dpth:.2f}')
     
-    for i in range(num_samples):
+    gspec = GridSpec(num_rows,3,figure=fig)
+    axs = np.empty((num_rows,3),dtype=object)
+    
+    for i in range(num_fits):
     
         t = adcp['t'][i]
         bin_dpth = adcp['bin_dpth'][i]
@@ -656,6 +670,9 @@ def velocity_profile_figure(profile,fn_save = None):
         zfit_list = adcp_fit['zfit'][i]
         ustar = adcp_fit['ustar'][i]
         z0 = adcp_fit['z0'][i]
+        
+        axs[i,0] = fig.add_subplot(gspec[i,:-1])
+        axs[i,1] = fig.add_subplot(gspec[i,-1])
         
         axs[i,0].pcolormesh(
             t,
@@ -681,8 +698,44 @@ def velocity_profile_figure(profile,fn_save = None):
         axs[i,1].legend()
         axs[i,1].set_ylabel('height above \nbed (m)',labelpad=0)
         
+    
+    ax_bot = fig.add_subplot(gspec[-1,:])        
+    plot_gs_profile(profile,ax_bot)
         
     if fn_save != None:
         fig.savefig(fn_save)
         
     return fig, axs
+
+def plot_gs_profile(profile, ax):
+
+    for i in range(profile['gs']['gs'].shape[0]):
+        ax.plot(profile['gs']['bin lower'],profile['gs']['gs'][i,:]
+                ,label = profile['gs']['Isokinetic Sample Depth'][i])
+
+    ax.set_xscale('log')
+    ax.legend(title = 'sample depth (m)')
+    ax.set_xlabel('grain size (um)')
+    ax.set_ylabel('volume % \n (right?)')
+        
+    return ax
+
+def profile_map_figure(profiles,A,fn_save = None):
+    #profiles:      grain size profiles
+    #A              dictionary of ADCP profiles as read in by rdi_readin_adcp_VariableBins
+
+    fig, ax = plt.subplots()
+
+    for key in profiles.keys():
+        profiles[key]['buffer_poly'].plot(ax=ax,facecolor='none',edgecolor='purple')
+        profiles[key]['station_pt'].plot(ax=ax, markersize=10, color='red')
+        
+        for ii in range(len(profiles[key]['adcp']['pos'])):
+            profiles[key]['adcp']['pos'][ii].plot(ax=ax,color='black')
+        
+    cx.add_basemap(ax, source=cx.providers.CartoDB.Positron, zoom=12)
+    
+    if fn_save != None:
+        fig.savefig(fn_save)
+        
+    return fig, ax
