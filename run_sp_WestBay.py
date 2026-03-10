@@ -134,5 +134,5 @@ for key in profiles_WB.keys():
         pass
     else:
         fig, ax = profile_fig_out   
-        plt.close(fig)
+        # plt.close(fig)
 

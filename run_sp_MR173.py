@@ -111,7 +111,7 @@ for key in profiles_MR173.keys():
     pth = r'C:\Users\cesposito\THE WATER INSTITUTE OF THE GULF\P-00703_NSF_Caltech - General\Data\_ProcessedData'
     
     fig, ax = sp.profile_figure(profiles_MR173[key],fn_save=os.path.join(pth,fn_save))
-    plt.close(fig)
+    # plt.close(fig)
 
 #%%
 
